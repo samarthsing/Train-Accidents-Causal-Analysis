@@ -1,0 +1,535 @@
+---
+title: "Project 2 - Testing Hypotheses, Modeling,  Producing Evidence & Recommendations"
+author: "Will Adorno, Samarth Singh, Mehrdad Fazli"
+theme: leonids
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Introduction
+
+We are tasked to apply evidence-informed systems engineering to address a major safety problem, train accidents. The goal of this study is to test the hypotheses we already developed in the first project. The final two severity metrics we selected and honed into from the earlier project were Total Accident Damage Cost and Total Casualties. Now, We need to provide evidence supporting the contributors to these accidents and then make appropriate recommendations to the FRA in order to prevent them.
+
+### Current Hypotheses
+
+#### Total Accident Damage Cost:
+
+1) Accidents caused by human factors at high train speeds significantly increase total accident damage cost
+
+* Null Hypothesis: Human factors combined with train speed do not significantly affect total accident damage cost
+
+* Alternate Hypothesis: Human factors at high train speeds signficantly increases total accident damage cost
+
+2) Derailment accidents that occur at high train speeds significantly increase total accident damage cost 
+
+* Null Hypothesis: Derailment accidents combined with train speed do not significantly affect total accident damage cost
+
+* Alternate Hypothesis: Derailment accidents at high train speeds significantly increases total accident damage cost
+
+#### Number of Casualties:
+
+1) Higher train speeds and accidents caused by human factors cause a significant increase in the number of casualties
+
+* Null Hypothesis: Train speed combined with the human factors accident type does not significantly affect the number of casualties
+
+* Alternate Hypothesis: Accidents caused by human factors at high train speeds significantly increase the number of casualties
+
+2) Derailment accidents on trains with a high number of cars containing HAZMAT will cause a significant increase in the number of casualties
+
+* Null Hypothesis: Derailment accident types combined with the number of cars containing HAZMAT has no significant effect on the number of casualties
+
+* Alternate Hypothesis: Derailment accidents on trains with a high number of cars containing HAZMAT significantly increases the number of casualties. 
+
+```{r "setup", include=FALSE}
+require("knitr")
+sourcedir <- "C:/Users/cornw/Documents/UVA Classes/Fall 2018/SYS 6021/Source"
+traindir <- "C:/Users/cornw/Documents/UVA Classes/Fall 2018/SYS 6021/Data"
+opts_knit$set(root.dir = sourcedir)
+
+setwd(sourcedir)
+source("AccidentInput.R")
+setwd(traindir)
+my.path <- getwd()
+setwd(my.path)
+acts <- file.inputl(my.path)
+totacts <- combine.data(acts)
+
+# Perform data conversions to proper variable type
+# Converts numeric Type into categories
+totacts$TYPE <- factor(totacts$TYPE, labels = c("Derailment", "HeadOn", "Rearend", "Side", "Raking", "BrokenTrain", "Hwy-Rail", "GradeX", "Obstruction", "Explosive", "Fire","Other","SeeNarrative" ))
+
+# Converts numeric TypeQ into categories
+totacts$TYPEQ <- as.numeric(totacts$TYPEQ)
+
+# Now convert to factor- use actual categories from data dictionary to be more informative
+totacts$TYPEQ <- factor(totacts$TYPEQ, labels = c("Freight", "Passenger", "Commuter", "Work",  "Single", "CutofCars", "Yard", "Light", "Maint"))
+
+# Used longer text than just single-letter causes to help with visualization and understanding
+totacts$Cause <- rep(NA, nrow(totacts))
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "M")] <- "Misc."
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "T")] <- "Structures"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "S")] <- "Signal/Comm"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "H")] <- "Human Factors"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "E")] <- "Mech/Elec"
+
+# Remove the duplicates - did early in the process, so the following analysis is more accurate 
+totacts_nd <- totacts[!(duplicated(totacts[, c("INCDTNO", "YEAR", "MONTH", "DAY", "TIMEHR", "TIMEMIN")])),]
+
+# Creates new variable Total Casualities to use just one variable to incorporate KLD and INJ
+totacts_nd$TOTCAS <- totacts_nd$TOTINJ + totacts_nd$TOTKLD
+
+# Create extreme Accident Damage $ and Total casualties datasets 
+library("lattice")
+dmgplot <- boxplot(totacts_nd$ACCDMG, main = "Boxplot of Total Accident Damage Cost ($)", ylab = "Accident Damage Cost ($)")
+xdmg <- totacts_nd[totacts_nd$ACCDMG > dmgplot$stats[5],]
+xcas <- totacts_nd[totacts_nd$TOTCAS > 0,]
+
+setwd(sourcedir)
+source("SPM_Panel.R")
+
+```
+## Variable Selection
+
+Before creating linear models, it important to screen variables to avoid multicollinearity and limit the number of parameters when including interactions. From Project 1, we know that train speed, number of cars carrying HAZMAT, weight tonnage, cause of accident, and type of accident all appeared to have a strong relationship with one of the severity metrics. There were several other predictors that we also think could be useful such as visibility, weather, train methods, head end train derailments and more. Below is a list of quantative and qualitative variables that we considered
+
+#### Quantitative Variables
+
+* CARS - number of cars carrying HAZMAT
+* TRNSPD - train speed
+* TONS - train weight in tonnage
+* HEADEND2 - number of head end locomotives, derailed
+* TEMP - temperature in Fahrenheit
+
+#### Qualitative Variables
+
+* TYPE - type of train accident. Derailments stood out in Project 1
+* TYPEQ - type of Train
+* Cause - cause of accident. Human factors stood out in Project 1
+* METHOD - method of operation
+* VISIBLTY - daylight period and specifically darkness
+* WEATHER - weather conditions
+* TYPTRK - type of track
+
+For the quantitative variables, we were concerned with multicollinearity and variables that lack significance. All quantitative variables will be centered (mean subtracted) to reduce multicollinearity if higher-order terms are later added to the model. Like in Project 1, we can look at scatterplot matrix to get an idea of correlation issues or that variables should be screened away. First, on the extreme ACCDMG dataset, TEMP appears to not have a significant relationship with ACCDMG. It is unlikely that TEMP would make accident damage more costly. Therefore, TEMP will not be included. Also, there doesn't appear to be any major correlation issues when looking at the pairwise comparisons.  
+
+```{r}
+uva.pairs(xdmg[,c("ACCDMG", "TRNSPD", "CARS", "TONS", "TEMP", "HEADEND2")])
+```
+
+A similar scatter plot can be done on the TOTCAS dataset. This time TEMP does have a slight trend, but TONS does not. For TOTCAS, we will screen away tons, but keep TEMP. After removing TONS, there are no major issues for pairwise correlations. 
+
+```{r}
+uva.pairs(xcas[,c("TOTCAS", "TRNSPD", "CARS", "TONS", "TEMP", "HEADEND2")])
+```
+
+For the qualitative variables, we need to reduce the number of bins per variable to focus the analysis on our hypotheses and to limit the number of parameters when using interaction terms. For the TYPE variable, we created a new variable to represent only derailments versus all other types. For Cause variable, we created a new variable to represent only accidents cause by human factors. We also tested other variables such as VISIBLTY, WEATHER, METHOD, and TYPEQ, but these variables either lack significance or their impact on the response was hard to explain.
+
+```{r, include=FALSE}
+# Centering Quantitative Variables to reduce multicollinearity with higher-order terms
+# This subtracts each column by its mean. This is typically only done for 
+# the higher order terms, but it was too difficult to separate. One downside is that
+# it makes the predictors hard to transform, but that is a rare occurrence anyway.
+xdmg$TRNSPD <- scale(xdmg$TRNSPD, scale = FALSE)
+xdmg$TONS <- scale(xdmg$TONS, scale = FALSE)
+xdmg$CARS <- scale(xdmg$CARS, scale = FALSE)
+xdmg$HEADEND2 <- scale(xdmg$HEADEND2, scale = FALSE)
+
+xcas$TRNSPD <- scale(xcas$TRNSPD, scale = FALSE)
+xcas$TEMP <- scale(xcas$TEMP, scale = FALSE)
+xcas$CARS <- scale(xcas$CARS, scale = FALSE)
+xcas$HEADEND2 <- scale(xcas$HEADEND2, scale = FALSE)
+
+# Create derailment categorical variable 
+xdmg_Derail <- rep(0, nrow(xdmg))
+xdmg_Derail[which(xdmg$TYPE == "Derailment")] <- 1 
+xdmg_Derail <- as.factor(xdmg_Derail)
+
+xcas_Derail <- rep(0, nrow(xcas))
+xcas_Derail[which(xcas$TYPE == "Derailment")] <- 1 
+xcas_Derail <- as.factor(xcas_Derail)
+
+# Create human factors categorical variable 
+xdmg_Human <- rep(0, nrow(xdmg))
+xdmg_Human[which(xdmg$Cause == "Human Factors")] <- 1 
+xdmg_Human <- as.factor(xdmg_Human)
+
+xcas_Human <- rep(0, nrow(xcas))
+xcas_Human[which(xcas$Cause == "Human Factors")] <- 1 
+xcas_Human <- as.factor(xcas_Human)
+
+```
+
+## Part 1: ACCDMG Analysis 
+
+```{r, include=FALSE}
+library(MASS)
+# Please install car package if you don't have already. Used for VIFs
+## install.packages("car")
+library("car")
+```
+
+### First ACCDMG Model
+
+There are an enormous number of ways to create a linear model. Sometimes you can start with just main effects and work up towards higher-order terms. The problem with this is it is hard to identify significant interactions if they're not in the model. It's possible the the main effect is insignificant, but the interaction is significant. Therefore, as long as there are no multicollinearity issues we can model all main effects and interactions at first and then determine what parameters can be removed. To assess multicollinearity we calculated Variance Inflation Factors (VIF). A VIF of 1 means that variable is perfectly orthognal. VIFs greater than 10 or even 5 are typically problematic. 
+
+```{r}
+xdmg.lm1 <- lm(ACCDMG~(TRNSPD + CARS + TONS +  HEADEND2 + xdmg_Derail + xdmg_Human) ^ 2, data=xdmg)
+print(vif(xdmg.lm1))
+```
+
+From this VIF report, there are four parameters with VIFs higher than 10. To alleviate this problem, the interaction terms can be removed first. If necessary, an entire main effect will be removed. To alleviate some of the extreme multicollinearity, we removed HEADEND2, CARS:xmd_Derail, and TONS:xdmg_Derail. As you can see below, the model without these terms have much improved VIFs with the highest being less than 5.
+
+```{r}
+## A couple of interactions and HEADEND2 have high VIFs, remove then and rerun 
+xdmg.lm2 <- lm(ACCDMG~(TRNSPD + CARS + TONS + xdmg_Derail + xdmg_Human) ^ 2 
+               - CARS:xdmg_Derail - TONS:xdmg_Derail, data=xdmg)
+print(vif(xdmg.lm2))
+```
+
+Now that we've addressed assumptions associated with the predictor variable we must do the same for the response variable. The diagnostic plots below reveal some issues with constant variance and normality of the residuals. The normal quantile plot shows that the response has a very heavy-tail in the high ACCDMG direction. 
+
+```{r}
+par(mfrow=c(2,2))
+plot(xdmg.lm2, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Transformation of the response can assist in achieving the residual normality assumption. The Box-Cox test can be applied to find an optimal lambda value. The optimal lambda in this case was -0.5 which is applied as an exponent to transform ACCDMG. However, this transformation will completely invert the response and make it very difficult to understand the model's output. Therefore, we selected a log transformation to improve normality, while also preserving most of the model's interpretability.
+
+```{r}
+boxcox(xdmg.lm2, plotit=T, lambda=seq(-2,2,by=0.5))
+L_dmg<-boxcox(xdmg.lm2, plotit = F)$x[which.max(boxcox(xdmg.lm1, plotit = F)$y)]
+print(L_dmg)
+
+## Rerun model with all main effects and interactions besides ones already removed
+xdmg.lm2.trans <- lm(log(ACCDMG)~(TRNSPD + CARS + TONS + xdmg_Derail + xdmg_Human) ^ 2 - CARS:xdmg_Derail - TONS:xdmg_Derail, data=xdmg)
+```
+
+We can re-examine the diagnostic plots now after re-running the model with the log transformed response. The normal quantile plot now has a much straighter line. The other three plots do not reveal any major violations of assumptions either.
+
+```{r}
+par(mfrow=c(2,2))
+plot(xdmg.lm2.trans, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Now that we're comfortable with the model's assumptions, we can now begin to assess the impact of the model's predictors with the response. The summary below shows that this model currently exlains over 22% of the total variance of ACCDMG. There are a 7 terms that are significant at p-value of less than 0.001. There are also a number of terms that do not have a strong significance with the response. A stepwise regression can execute both backward and forward to subtract or add terms until it reaches a local minima.
+
+```{r}
+summary(xdmg.lm2.trans)
+```
+
+
+```{r, include=FALSE}
+xdmg.lm2.step <- step(xdmg.lm2.trans)
+```
+
+Before this reduced model can be fully accepted, the diagnostic plots should be reviewed again. There appears to not be much of a change from before which is expected since only insignificant terms were removed.
+
+```{r}
+par(mfrow=c(2,2))
+plot(xdmg.lm2.step, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+One last possibilty for model inadequacy is due to lack of fit because there are missing parameters. This could be due to missing variables all together or missing higher-order terms. A lack of fit test is one of way of doing so, but we haven't figured out how to do that in R yet. To determine if any current parameters require a higher-order term we can plot each quantitative variable by the model's residual. Those three plots are shown below. There did not appear to be any issues with constant variance amongst the predictors, so no higher-order terms or transformations are required.
+
+```{r}
+par(mfrow=c(1,3))
+plot(xdmg$TRNSPD, resid(xdmg.lm2.step), main = "Residual vs TRNSPD", ylab = "Stdized Resid", xlab = "Train Speed (Centered)")
+plot(xdmg$CARS, resid(xdmg.lm2.step), main = "Residual vs CARS", ylab = "Stdized Resid", xlab = "# Cars HAZMAT release (Centered)")
+plot(xdmg$TONS, resid(xdmg.lm2.step), main = "Residual vs TONS", ylab = "Stdized Resid", xlab = "Weight in Tonnage (Centered)")
+par(mfrow=c(1,1))
+```
+
+Finally, the reduced model summary after stepwise regression is shown below. The model's R^2, remained virtually the same after the insignificant parameter reduction. The current takeaways are that TRNSPD, TONS, Human Factors main effects all significantly increase accident damage costs. For interactions, train speed combined with TONS, Derailments, or Human Factors all significantly increase accident damage. 
+
+```{r}
+summary(xdmg.lm2.step)
+```
+
+### Second ACCDMG Model
+
+While making the first model and experimenting with all our predictors, it was clear TRNSPD, Human Factors , and TONS were three main factors affecting ACCDMG. Derailments and CARS were also sigificant at the interaction level. Although, only TRNSPD, Human Factors, and derailments were a concern in our hypothesis. Therefore, for the strategy of second model we wanted to include those important factors, but also some of the extraneous factors such as Type of track, weather, visibility, track type, method of operations, and more. We understand that these types of variables may not be controllable by the FRA, but we are interested if our main variables like human factors and train speed lose signiificance or are perhaps correlated with these other factors.
+
+The method to create the linear model is to select our main effect parameters and then create a model with them and all the interation terms. Upon checking the results, we can remove the insignificant and multicollinear interaction terms. Multicollinearity is measured using VIFs as mentioned in the first model.
+Then, we can compare Adjusted R^2 of two models and discuss anything else like model adequacy and diagnostics. 
+
+First, the following are the new qualitative variables we made for the second model. For visibility, we isolated just the darkness time periods. For weather, we looked at bad conditions like rain, fod, sleet, and snow. For method of operation, we isolated other than main track operations. For type of train, we looked at freight, passanger, and commuter trains as a separate category. Finally, we looked at only the main track type. With all of these new variables entering the model, we will likely have to deal with multicollinearity issues. 
+
+```{r, include=FALSE}
+xdmg_Dark <- rep(0, nrow(xdmg))
+xdmg_Dark[which(xdmg$VISIBLTY == 4)] <- 1 
+xdmg_Dark <- as.factor(xdmg_Dark)
+
+xdmg_BadWeather <- rep(0, nrow(xdmg))
+xdmg_BadWeather[which(xdmg$WEATHER > 2)] <- 1 
+xdmg_BadWeather <- as.factor(xdmg_BadWeather)
+
+xdmg_operation <- rep(0, nrow(xdmg))#mode of operation inside the train
+xdmg_operation[which(grepl("N",xdmg$METHOD,fixed=TRUE))] <- 1
+xdmg_operation <- as.factor(xdmg_operation)
+
+xdmg_type <- rep(0, nrow(xdmg))# 
+xdmg_type[which(grepl("Freight",xdmg$TYPEQ,fixed=TRUE))] <- 1
+xdmg_type[which(grepl("Passenger",xdmg$TYPEQ,fixed=TRUE))] <- 1
+xdmg_type[which(grepl("Commuter",xdmg$TYPEQ,fixed=TRUE))] <- 1
+xdmg_type <- as.factor(xdmg_type)
+
+xdmg_typetrack <- rep(0, nrow(xdmg))
+xdmg_typetrack[which(xdmg$TYPTRK != 1)] <- 1
+xdmg_typetrack <- as.factor(xdmg_typetrack)
+```
+
+After construction of the modified categorical variables, we built a new model using the log transformation on ACCDMG and the variables discussed. Model contains all main effects and interactions. This many terms obviously led to severely high VIFs.
+
+```{r}
+xdmg.lm3 <- lm(log(ACCDMG) ~ (TRNSPD + xdmg_Derail + xdmg_Human + xdmg_Dark + xdmg_BadWeather + xdmg_type + xdmg_operation + xdmg_typetrack) ^ 2 , data=xdmg)
+print(vif(xdmg.lm3))
+```
+
+To alleviate most of the multicollinearity, we decided to include only TRNSPD, Human Factors, Derailments, Method of Operations and Type of Track variables. There are likely other variable combinations that would diminish multicollinearity, but this is the model we were most happy with and that we were able to manually derive.   
+
+```{r}
+xdmg.lm4 <- lm(log(ACCDMG) ~ (TRNSPD + xdmg_Derail +xdmg_Human + xdmg_operation + xdmg_typetrack) ^ 2 , data=xdmg)
+print(vif(xdmg.lm4))
+```
+
+From this VIF report, there are three interaction terms parameters with VIFs near or higher than 10. To alleviate this problem, the interaction terms are removed. To reduce  multicollinearity, we removed interaction terms xdmg_Derail:xdmg_operation, xdmg_Derail:xdmg_typetrack, and xdmg_operation:xdmg_typetrack. As you can see below, the model without these terms have much improved VIFs with the highest being
+less than 6.
+
+```{r}
+xdmg.lm5 <- lm(log(ACCDMG)~(TRNSPD +xdmg_Derail +xdmg_Human +xdmg_operation+xdmg_typetrack) ^ 2 - xdmg_Derail:xdmg_operation - xdmg_Derail:xdmg_typetrack - xdmg_operation:xdmg_typetrack, data=xdmg)
+print(vif(xdmg.lm5))
+```
+
+Now, we will discuss our second generated model. It explains over 21% of the total variance of ACCDMG. There are 6 terms that are significant at p-value of less than 0.001. There are also a number of terms that do not have a strong significance with the response. 
+
+```{r}
+summary(xdmg.lm5)
+```
+
+A stepwise regression can execute both backward and forward to subtract or add terms until it reaches a local minima. Below is the final model after stepwise regression.
+
+```{r, include = FALSE}
+xdmg.lm5.step <- step(xdmg.lm5)
+```
+
+```{r}
+summary(xdmg.lm5.step)
+```
+
+Diagnostic plots are shown below for this reduced model. There appears that residuals have a constant variance and are close to normally distributed. Also, there are no influential points according to Cook's distance. 
+
+```{r}
+par(mfrow=c(2,2))
+plot(xdmg.lm5.step, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+From the model, TRNSPD, human factors, Derailments, Type of tracks(whether its main or not) are significant main effect terms. Most of the interaction terms were already shown as significant in the first model. The state and type of track may be primary cause of derailment and hence for accident damage.
+
+### Model Comparison
+
+As shown below, the first model bests the second model in Adjusted r-square, AIC, and BIC. Model adequacy via the diagnostic plots were similar for both models. The first model also had a lower maximum VIF which means it has less multicollinearity and could be considered more trustworthy. Considering all of these criterion we selected the first model to utilize when testing our ACCDMG hypotheses.
+
+```{r}
+Model1_adj_rsquared <- summary(xdmg.lm2.step)$adj.r.squared
+print(Model1_adj_rsquared)
+
+Model2_adj_rsquared <- summary(xdmg.lm5.step)$adj.r.squared
+print(Model2_adj_rsquared)
+
+Model1_AIC <- AIC(xdmg.lm2.step)
+print(Model1_AIC)
+
+Model2_AIC <- AIC(xdmg.lm5.step)
+print(Model2_AIC)
+
+Model1_BIC <- BIC(xdmg.lm2.step)
+print(Model1_BIC)
+
+Model2_BIC <- BIC(xdmg.lm5.step)
+print(Model2_BIC)
+```
+
+## Part 2: Casualties Analysis 
+
+### First TOTCAS Model
+
+The first model for total casualties was obtained using a similar strategy to the firts model for ACCDMG. First, the VIFs of the model must be checked to ensure there is not problematic multicollinearity between the predictor variables. This time, there were not any major issues with multicollinearity, so no terms were removed.
+
+```{r}
+xcas.lm1 <- lm((TOTCAS)~(TRNSPD + CARS + TEMP + HEADEND2 + xcas_Derail + xcas_Human) ^ 2, data=xcas)
+print(vif(xcas.lm1))
+```
+
+Next, the model's diagnostic plots must be reviewed to ensure the assumptions of a linear regression model are met. Constant variance and normality do not look overly problematic. The major problem lies in the influence points contained in this model. Point #191 is over 40 standard deviations from the mean which for a normal distribution is incredibly rare. 
+
+```{r}
+par(mfrow=c(2,2))
+plot(xcas.lm1, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Sometimes influence points are present due to errors or data that is not appropriate. To check the validity of some of these potential points, we must read the narrative entries in these rows. After reading these narratives, it was clear that these data points are valid and should not be discarded for the sake of improving the model's adequacy. 
+
+```{r, include=FALSE}
+print(xcas[191,122:136])
+print(xcas[2105,122:136])
+print(xcas[956,122:136])
+```
+
+Response transformations can be tried to reduce skew and hopefully eliminate the influence points. The Box-Cox test calculated an optimal lambda of -1.3. 
+
+```{r}
+boxcox(xcas.lm1, plotit=T, lambda=seq(-2,2,by=0.5))
+L_xcas <-boxcox(xcas.lm1, plotit = F)$x[which.max(boxcox(xcas.lm1, plotit = F)$y)]
+print(L_xcas)
+```
+
+The model diagnostic plots for the TOTCAS model with transformed response are shown below. While the transformation did take care of the influence point issue, the other assumption tests are much worse than before. The normality assumption is severely violated. Due to such as poor performance by the transformations, we decided to stick with the original modle even with the influence point issues. With data sets that include this many outliers or influence points, it is sometimes appropriate to use a Robust Regression technique instead of Ordinary Least Squares (OLS). Robust Regression enables another distribution to be fit to the response that can have much wider tails than the normal distribution. This outside of the current scope of the class, so we will continue to utilize OLS. 
+
+```{r}
+xcas.lm1.trans <- lm(TOTCAS^L_xcas~(TRNSPD + CARS + TEMP + HEADEND2 + xcas_Derail + xcas_Human) ^ 2, data=xcas)
+
+par(mfrow=c(2,2))
+plot(xcas.lm1.trans, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Below is the model summary for the original (non-transformed) TOTCAS model. This model is only able to explain just over 9% of the variance of total casualties which is much lower than the ACCDMG models.
+
+```{r}
+summary(xcas.lm1)
+```
+
+Like before, we can apply stepwise regression to subtract and add terms until a local minima for AIC is found. The diagnostic plots should be reassessed to affirm that the model's assumptions are met. The results are similar to before. The normality distribution is skewed and there is at least one data point that exceeds 1.0 for Cook's distance. Since the data points are valid and transformations did not improve the situation, we will continue to utilize an untransformed response.
+
+```{r include=FALSE}
+xcas.lm1.step <- step(xcas.lm1, direction = "both")
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(xcas.lm1.step, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Next, residual versus predictors plots can help determine if transformations or higher-order terms are required on the predictor variables. Beside the outlier points, no alarming patterns appear in these charts.
+
+```{r}
+par(mfrow=c(2,2))
+plot(xcas$TRNSPD, resid(xcas.lm1), main = "Residual vs TRNSPD", ylab = "Stdized Resid", xlab = "Train Speed (Centered)")
+plot(xcas$CARS, resid(xcas.lm1), main = "Residual vs CARS", ylab = "Stdized Resid", xlab = "# of HAZMAT CARs (Centered)")
+plot(xcas$TEMP, resid(xcas.lm1), main = "Residual vs TEMP", ylab = "Stdized Resid", xlab = "Temperature (Centered)")
+plot(xcas$HEADEND2, resid(xcas.lm1), main = "Residual vs HEADEND2", ylab = "Stdized Resid", xlab = "Head End Derailments (Centered)")
+par(mfrow=c(1,1))
+```
+
+Finally, the model's summary is shown below. Interestingly, none of the quantitative variables main effects are significant. Categorical variables main effects for Human Factors and Derailments do show a significant relationship with TOTCAS. For the interaction terms, only 4 out of the 8 terms significantly increased TOTCAS. As with ACCDMG, TRNSPD combined with accidents caused Human Factors or Derailments will significantly increase the TOTCAS severity metric. The other interaction of note is CARS:xcas_Derail. If there are high number of cars carrying HAZMAt and the train derails, there could be a greater chance HAZMAT spillage. The HAZMAT spillage will require that train crew and passangers receive medical attention to assess their exposure to the HAZMAT.
+
+```{r}
+summary(xcas.lm1.step)
+```
+
+### Second TOTCAS Model
+
+For the second model, we will continue to not transform the response, because we deemed the transformation as not useful during analysis of the first model. The first model was interesting in that most of the main effects were not significant, but a lot of interaction terms were. In contrast, we looked at a main effects only model to see how the relationships would change. Multicollinearity definitely does not appear to an issue for this model, because all six VIFs are below 2.
+
+```{r}
+xcas.lm2 <- lm(TOTCAS~(TRNSPD + CARS + TEMP + HEADEND2 + xcas_Derail + xcas_Human), data=xcas)
+print(vif(xcas.lm2))
+```
+
+Next we take another look at the diagnostic plots, but we expect there to still be influential points as we saw in the first model. As expected, the problem of influential points has not been resolved and the plots look almost identical as before.
+
+```{r}
+par(mfrow=c(2,2))
+plot(xcas.lm2, labels.id = NULL)
+par(mfrow=c(1,1))
+```
+
+Now, we can take a look at the summary of the model and draw some conclusions. Interestingly, in the absence of the interaction terms, some of the main effects are now significant. TRSNPD, CARS, Derailments, and Human Factors are all significant at at least the 99% confidence level, while TEMP is significant if we lowered our confidence to 95%. The HEADEND2 main effect does not show any significance. The adjusted r-square of this model was only 0.023 meaning that this first-order model only explained 2.3% of the total variance of TOTCAS. This findings should be taken lightly since both the first and second model both have issues with influential points when applying OLS.  
+
+```{r}
+summary(xcas.lm2)
+```
+
+### TOTCAS Model Comparison
+
+Since Model #2 is nested within Model #1 a Partial F-Test can determine if it was worthwhile to include the 8 additonal interaction terms to the main effects model. As shown below, with well over 99% confidence including the interaction terms was statisically significant. 
+
+```{r}
+anova(xcas.lm2, xcas.lm1.step)
+```
+
+We can also assess the three major performance metrics: adjusted R-squared, AIC, and BIC. Shown below, the first model also dominates in all three of these areas. One of the few benefits the main effect model has over the model with interactions is less multicollinearity. The max VIF of the Model #2 is 1.35, while the max VIF for Model #1 is 3.05. Although, 3.05 is in the acceptable range. If we were more concerned about predictions, we may consider the main effects model since it is more generalized. In this case, we are interested in statistically evaluating our hypotheses which all include interaction terms. Therefore, we will utilize Model #1 to evaluate our hypotheses. 
+
+```{r}
+Model1_adj_rsquared <- summary(xcas.lm1.step)$adj.r.squared
+print(Model1_adj_rsquared)
+
+Model2_adj_rsquared <- summary(xcas.lm2)$adj.r.squared
+print(Model2_adj_rsquared)
+
+Model1_AIC <- AIC(xcas.lm1.step)
+print(Model1_AIC)
+
+Model2_AIC <- AIC(xcas.lm2)
+print(Model2_AIC)
+
+Model1_BIC <- BIC(xcas.lm1.step)
+print(Model1_BIC)
+
+Model2_BIC <- BIC(xcas.lm2)
+print(Model2_BIC)
+```
+
+
+## Part 3: Evidence and Recommnedation to FRA
+
+Given this train accident data, we demonstrate to use evidence informed systems engineering to address a major safety problem and provide some recommendations to the FRA. To accomplish this, we utilized two accident severity metrics,  ACCDMG (accident damage cost) and TOTCAS (casualties). We developed two hypotheses each for metric and then built linear regression models using certain predictors from the dataset to prove or disprove the hypotheses. The entire process of building model is described in this document. This includes selecting the quantitative variables and modifying and selecting qualitative variables. Then, the models were created using the main effect parameters, as well as, the interactions terms that did not create multicollinearity issues.
+
+These models were evaluated on the basis of the Adjusted R-squared metric and their model adequacy by utilizing diagnostic plots. We adjusted our models, making transformations to the response variables after assesing these diagnostic plots. Then we did a stepwise regression to get a subset of our parameters which would utiilize as the final models. These models seem to confirm with our hypotheses as explained in the next section and then we give recommendations to the FRA.
+
+### Evaluating the Hypotheses
+
+#### ACCDMG
+
+1)  Accidents caused by Human Factors at high train speeds significantly increase total accident damage cost
+
+* At over 99% confidence, we reject the null hypothesis that Human factors and train speed have no significant influence on ACCDMG. Human factors at high train speeds are shown to significantly increase total accident damage cost.
+
+2) Derailment accidents that occur at high train speeds significantly increase total accident damage cost 
+
+* At over 99% confidence, we reject the null hypothesis that derailmetns and train speed have no significant influence on ACCDMG. Derailments at high train speeds are shown to significantly increase total accident damage cost.
+
+#### TOTCAS
+
+1) Higher train speeds and accidents caused by human factors cause a significant increase in the number of casualties
+
+* At over 99% confidence, we reject the null hypothesis that Human factors and train speed have no significant influence on the TOTCAS. Human factors at high train speeds are shown to significantly increase total casualties.
+
+2) Derailment accidents on trains with a high number of cars containing HAZMAT will cause a significant increase in the number of casualties
+
+* At over 99% confidence, we reject the null hypothesis that cars carrying HAZMAT  and derailments have no significant influence on the TOTCAS. Derailments with a high number of cars carry HAZMAT significantly increases total casualties. 
+
+### Recommendations
+
+For both ACCDMG and TOTCAS models, it was found that human factors can have a great impact to accident severity when they are operating at high speeds. The United States train system is already notoriously slow compared to the rest of the world, so we would not recommend reducing speed limits. Our recommendation would be to add cyber-physical elements to train operating systems that can autonomously control speeds or inform the operator when things seem awry. One example of these is positive train control which will slow down or stop the train if it is going at an excessive speed in a certain location (1). Positive train control also alerts the operator when speed limit changes are incoming or there are poor track conditions (1). Much like back-up cameras now installed on every car, we recommend that every train be outfitted with positive train control.  
+
+It is also possible to one day remove train operators all together. Positive train control would fall under Automated Train Protection, but there are even higher stages of autonomy. Automated Train Operation can automate features like changing tracks, starting, and stopping (2). Driverless Train Operation means there are no drivers, but there is still humans available in case of emergency (2). Finally, trains could have full Unattened Train Operation (2). While train conductors and engineers may not want their current jobs automated, these automation possibilities could to lead to more efficient and safer railroad transportation. So, to improve the situation in terms of human factors, either improve their training and implement stringent punishment on mistakes or try to reduce the human factors via automation.
+
+Derailments are also have a major impact on Accident damage and casualties. Derailments are not all that common, but they can be disastrous. Derailments can happen due to lack of maintenance of the roadbed, track, and equipment (3). Instead of manually inspecting tracks as in the past, track maintenance should be automated using derailment detection devices (3). These sensors use 'movement and tilt' to detect the possibility of train derailment before it happens. Derailment detection systems monitor the possibility of derailment throughout the journey by sensing the temperature of the wheels. Thus proper maintenance and monitoring of trains and tracks help in reducing derailments.
+
+### References
+
+1) "Positive Train Control." UP: Positive Train Control, www.up.com/media/media_kit/ptc/about-ptc/.
+
+2) Sankaran, Vishwam. "Fully Autonomous Trains Are Better Suited for Moving Ores than People." The Next Web, 13 July 2018, thenextweb.com/artificial-intelligence/2018/07/13/fully-autonomous-trains-are-better-suited-for-moving-ores-than-people/.
+
+3) "How to Prevent Train Derailments and Collisions." Crouzet, 11 Dec. 2017, blog.crouzet.com/how-to-prevent-train-derailments-and-collisions/.
+
+4) Sun, Yan Q. "Mitigating Train Derailments Due to Sharp Curve and Overspeed." Frontiers in Mechanical Engineering, vol. 4, 2018, doi:10.3389/fmech.2018.00008.
