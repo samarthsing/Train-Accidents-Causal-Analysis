@@ -1,4 +1,6 @@
 # Train-Accidents-Causal-Analysis
+Evidence-informed System Engineering methods to perform Causal Analysis of Train Accidents in US for the last 18 years
+
 
 In this project, we were tasked to apply evidence-informed systems engineering to address a major safety problem, train accidents.
 Earlier with univariate and multivariate data visualization techniques we narrowed our metrics to total casualties( people dead + accidents occured) and Accident damage cost to define the severity of a particular train accident.
